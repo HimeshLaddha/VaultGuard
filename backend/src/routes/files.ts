@@ -16,7 +16,11 @@ const upload = multer({
         if (ALLOWED_MIME_TYPES.includes(file.mimetype)) {
             cb(null, true);
         } else {
-            cb(new Error(`File type '${file.mimetype}' is not allowed`));
+            // multer v2: pass null + false, attach error message as a custom property
+            (cb as (err: Error | null, accept: boolean) => void)(
+                new Error(`File type '${file.mimetype}' is not allowed`),
+                false
+            );
         }
     },
 });
@@ -116,7 +120,7 @@ router.post('/upload', withAuth, (req: Request, res: Response): void => {
 
 /* ─────────── GET /api/files/:id/download ─────────── */
 router.get('/:id/download', withAuth, (req: Request, res: Response): void => {
-    const file = store.getFileById(req.params.id);
+    const file = store.getFileById(req.params['id'] as string);
     if (!file) { res.status(404).json({ error: 'File not found' }); return; }
 
     if (file.cloudinaryPublicId) {
@@ -131,7 +135,7 @@ router.get('/:id/download', withAuth, (req: Request, res: Response): void => {
 /* ─────────── DELETE /api/files/:id ─────────── */
 router.delete('/:id', withAuth, async (req: Request, res: Response): Promise<void> => {
     const ip = getIp(req);
-    const file = store.getFileById(req.params.id);
+    const file = store.getFileById(req.params['id'] as string);
 
     if (!file) { res.status(404).json({ error: 'File not found' }); return; }
 

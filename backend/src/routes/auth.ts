@@ -4,6 +4,7 @@ import { LoginSchema, MfaSchema } from '../utils/validation';
 import { signPreAuthToken, signAccessToken, setPreAuthCookie, setAccessCookie, clearAuthCookies } from '../utils/auth';
 import { store } from '../store/index';
 import { withAuth, withPreAuth } from '../middleware/auth';
+import { authLimiter } from '../middleware/rateLimit';
 
 const router = Router();
 
@@ -12,13 +13,13 @@ const getIp = (req: Request): string =>
     (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
 
 /* ─────────────────── POST /api/auth/login ─────────────────── */
-router.post('/login', async (req: Request, res: Response): Promise<void> => {
+router.post('/login', authLimiter, async (req: Request, res: Response): Promise<void> => {
     const ip = getIp(req);
 
     /* 1. Validate input */
     const parsed = LoginSchema.safeParse(req.body);
     if (!parsed.success) {
-        res.status(400).json({ error: parsed.error.errors[0].message });
+        res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Invalid input' });
         return;
     }
 
@@ -58,14 +59,14 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
 });
 
 /* ─────────────────── POST /api/auth/mfa ─────────────────── */
-router.post('/mfa', withPreAuth, async (req: Request, res: Response): Promise<void> => {
+router.post('/mfa', authLimiter, withPreAuth, async (req: Request, res: Response): Promise<void> => {
     const ip = getIp(req);
     const preUser = req.preAuthUser!;
 
     /* 1. Validate code */
     const parsed = MfaSchema.safeParse(req.body);
     if (!parsed.success) {
-        res.status(400).json({ error: parsed.error.errors[0].message });
+        res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Invalid input' });
         return;
     }
 

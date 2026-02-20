@@ -235,3 +235,113 @@ The `backend/src/store/index.ts` file acts as a simple in-memory database. To co
 1. Replace the `users`, `files`, and `auditLogs` arrays with database queries
 2. Update the store helper functions (`findUserByEmail`, `addFile`, etc.) to use your ORM/client
 3. No route code needs to change — routes only call store functions
+
+---
+
+## Security Features
+
+### Two-Phase MFA Authentication
+
+Authentication is split into two distinct JWT-gated steps to prevent single-token compromise:
+
+```
+Step 1 — POST /api/auth/login
+  ├── Validates credentials with bcrypt.compare() (constant-time)
+  ├── Never reveals whether the email exists (generic error)
+  └── Issues a short-lived pre-auth JWT (5 min) in an HttpOnly cookie
+
+Step 2 — POST /api/auth/mfa
+  ├── Validates the pre-auth JWT (withPreAuth middleware)
+  ├── Checks the 6-digit TOTP code against the user's stored secret
+  └── Issues a full access JWT (8 h) and clears the pre-auth cookie
+```
+
+If an attacker steals the pre-auth cookie they still cannot access any protected data — only the MFA endpoint accepts it, and it expires in 5 minutes.
+
+---
+
+### Input Sanitization
+
+**Zod schemas** validate every request body before it reaches business logic:
+
+| Schema | Fields validated |
+|---|---|
+| `LoginSchema` | `email` (valid format, max 254 chars), `password` (non-empty, max 128 chars) |
+| `MfaSchema` | `code` (exactly 6 digits, `/^\d{6}$/`) |
+| Multer `fileFilter` | MIME type matched against allowlist (PDF, DOCX, PNG, JPG, TXT) |
+
+**Filename sanitizer** (`sanitizeFilename`) strips all path traversal characters (`../`, `/`, `\`, null bytes) before storing the filename — prevents both directory traversal and directory injection attacks.
+
+---
+
+### Role-Based Access Control (RBAC)
+
+Access control is enforced at the route level via the `withRole(role)` middleware:
+
+```
+GET  /api/audit            → withAuth + withRole('admin') → 403 for non-admins
+GET  /api/audit/export     → withAuth + withRole('admin') → 403 for non-admins
+DELETE /api/files/:id      → withAuth + ownership check OR admin role
+```
+
+User role is embedded in the JWT payload at login and re-checked on every request — it is never trusted from the client request body.
+
+---
+
+### Rate Limiting
+
+Three independent limiters prevent brute-force and DoS attacks:
+
+| Limiter | Endpoints | Window | Max requests |
+|---|---|---|---|
+| Auth limiter | `POST /api/auth/login`, `POST /api/auth/mfa` | 15 minutes | 10 |
+| Upload limiter | `POST /api/files/upload` | 1 hour | 20 |
+| Global limiter | All `/api/*` endpoints | 15 minutes | 200 |
+
+Returns `429 Too Many Requests` with a descriptive JSON error when exceeded.
+
+---
+
+### HTTP Security Headers (Helmet.js)
+
+| Header | Value | Purpose |
+|---|---|---|
+| `Content-Security-Policy` | `default-src 'self'` + Cloudinary for images | Blocks XSS, data injection |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` (prod only) | Forces HTTPS |
+| `X-Frame-Options` | `DENY` | Prevents clickjacking |
+| `X-Content-Type-Options` | `nosniff` | Prevents MIME sniffing |
+| `Referrer-Policy` | `no-referrer` | No referrer leakage |
+| `X-Powered-By` | *(removed)* | Hides framework fingerprint |
+
+---
+
+## Deployment (Production)
+
+### Build both apps
+
+```bash
+# From project root
+npm run build
+```
+
+This runs `tsc` (backend) and `next build` (frontend) in sequence.
+
+### Start for production
+
+```bash
+# Backend
+cd backend && NODE_ENV=production node dist/server.js
+
+# Frontend
+cd frontend && npm run start
+```
+
+### Quick checklist before going live
+
+- [ ] Replace all demo credentials in `store/index.ts` with real users + bcrypt hashes
+- [ ] Set `NODE_ENV=production` — enables HSTS and disables dev-only logging
+- [ ] Generate strong JWT secrets: `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`
+- [ ] Set `FRONTEND_URL` to your production domain
+- [ ] Store all `.env` secrets in your hosting provider's secrets manager (never commit)
+- [ ] Point `CLOUDINARY_FOLDER` to a production-specific folder
+- [ ] Enable Cloudinary's upload restrictions to only allow server-side uploads

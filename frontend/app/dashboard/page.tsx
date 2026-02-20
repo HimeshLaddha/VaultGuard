@@ -1,12 +1,30 @@
 'use client';
 import { useState, useEffect } from 'react';
+import dynamic from 'next/dynamic';
 import Sidebar from '@/components/Sidebar';
 import StatusBadge from '@/components/StatusBadge';
-import FileTable from '@/components/FileTable';
-import AuditLogTable from '@/components/AuditLogTable';
 import { HardDrive, Files, Clock, Monitor, TrendingUp, Shield } from 'lucide-react';
 import Link from 'next/link';
 import { api, FileRecord, AuditLogEntry } from '@/lib/apiClient';
+
+/* ── Code-split heavy table components ── */
+const TableSkeleton = () => (
+    <div className="rounded-2xl overflow-hidden animate-pulse" style={{ border: '1px solid rgba(0,200,255,0.1)' }}>
+        {[...Array(4)].map((_, i) => (
+            <div key={i} className="h-14 mx-4 my-2 rounded-xl" style={{ background: 'rgba(0,200,255,0.04)' }} />
+        ))}
+    </div>
+);
+
+const FileTable = dynamic(() => import('@/components/FileTable'), {
+    ssr: false,
+    loading: () => <TableSkeleton />,
+});
+
+const AuditLogTable = dynamic(() => import('@/components/AuditLogTable'), {
+    ssr: false,
+    loading: () => <TableSkeleton />,
+});
 
 export default function DashboardPage() {
     const [files, setFiles] = useState<FileRecord[]>([]);

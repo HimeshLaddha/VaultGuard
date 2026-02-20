@@ -4,21 +4,21 @@ import path from 'path';
 /* ── Login ── */
 export const LoginSchema = z.object({
     email: z
-        .string({ required_error: 'Email is required' })
-        .email('Invalid email address')
+        .string({ message: 'Email is required' })
+        .email({ message: 'Invalid email address' })
         .max(254)
         .transform((v) => v.toLowerCase().trim()),
     password: z
-        .string({ required_error: 'Password is required' })
-        .min(8, 'Password must be at least 8 characters')
+        .string({ message: 'Password is required' })
+        .min(8, { message: 'Password must be at least 8 characters' })
         .max(128),
 });
 
 /* ── MFA ── */
 export const MfaSchema = z.object({
     code: z
-        .string({ required_error: 'MFA code is required' })
-        .regex(/^\d{6}$/, 'MFA code must be exactly 6 digits'),
+        .string({ message: 'MFA code is required' })
+        .regex(/^\d{6}$/, { message: 'MFA code must be exactly 6 digits' }),
 });
 
 /* ── File upload (metadata) ── */
