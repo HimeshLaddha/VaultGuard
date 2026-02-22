@@ -22,8 +22,23 @@ export const api = {
             body: JSON.stringify({ email, password }),
         }),
 
+    register: (name: string, email: string, password: string) =>
+        request<{ message: string; email: string }>('/api/auth/register', {
+            method: 'POST',
+            body: JSON.stringify({ name, email, password }),
+        }),
+
+    verifyEmail: (email: string, code: string) =>
+        request<{ message: string; user: { id: string; email: string; name: string; role: string; status: string } }>(
+            '/api/auth/verify-email',
+            {
+                method: 'POST',
+                body: JSON.stringify({ email, code }),
+            }
+        ),
+
     verifyMfa: (code: string) =>
-        request<{ message: string; user: { id: string; email: string; name: string; role: string } }>(
+        request<{ message: string; user: { id: string; email: string; name: string; role: string; status: string } }>(
             '/api/auth/mfa',
             { method: 'POST', body: JSON.stringify({ code }) }
         ),
@@ -32,7 +47,19 @@ export const api = {
         request<{ message: string }>('/api/auth/logout', { method: 'POST' }),
 
     me: () =>
-        request<{ id: string; email: string; name: string; role: string }>('/api/auth/me'),
+        request<{ id: string; email: string; name: string; role: string; status: string }>('/api/auth/me'),
+
+    /* ── Admin ── */
+    getPendingUsers: () =>
+        request<{ id: string; email: string; name: string; status: string; createdAt: string }[]>(
+            '/api/auth/pending-users'
+        ),
+
+    approveUser: (userId: string) =>
+        request<{ message: string }>('/api/auth/approve-user', {
+            method: 'POST',
+            body: JSON.stringify({ userId }),
+        }),
 
     /* ── Files ── */
     getFiles: () => request<FileRecord[]>('/api/files'),

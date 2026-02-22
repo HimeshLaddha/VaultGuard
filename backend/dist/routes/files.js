@@ -1,90 +1,74 @@
-import { Router, Request, Response } from 'express';
-import multer from 'multer';
-import { v4 as uuid } from 'uuid';
-import { withAuth, withApproval } from '../middleware/auth';
-import { store } from '../store/index';
-import { ALLOWED_MIME_TYPES, MAX_FILE_SIZE, sanitizeFilename } from '../utils/validation';
-import { uploadToCloudinary, getSignedUrl, deleteFromCloudinary } from '../utils/cloudinary';
-
-const router = Router();
-
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const multer_1 = __importDefault(require("multer"));
+const uuid_1 = require("uuid");
+const auth_1 = require("../middleware/auth");
+const index_1 = require("../store/index");
+const validation_1 = require("../utils/validation");
+const cloudinary_1 = require("../utils/cloudinary");
+const router = (0, express_1.Router)();
 /* ── Multer memory storage (buffer → Cloudinary, no local disk) ── */
-const upload = multer({
-    storage: multer.memoryStorage(),
-    limits: { fileSize: MAX_FILE_SIZE },
+const upload = (0, multer_1.default)({
+    storage: multer_1.default.memoryStorage(),
+    limits: { fileSize: validation_1.MAX_FILE_SIZE },
     fileFilter: (_req, file, cb) => {
-        if (ALLOWED_MIME_TYPES.includes(file.mimetype)) {
+        if (validation_1.ALLOWED_MIME_TYPES.includes(file.mimetype)) {
             cb(null, true);
-        } else {
+        }
+        else {
             // multer v2: pass null + false, attach error message as a custom property
-            (cb as (err: Error | null, accept: boolean) => void)(
-                new Error(`File type '${file.mimetype}' is not allowed`),
-                false
-            );
+            cb(new Error(`File type '${file.mimetype}' is not allowed`), false);
         }
     },
 });
-
-const getIp = (req: Request): string =>
-    (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
-
-const sizeLabel = (bytes: number) =>
-    bytes < 1_048_576
-        ? `${(bytes / 1024).toFixed(1)} KB`
-        : `${(bytes / 1_048_576).toFixed(2)} MB`;
-
+const getIp = (req) => req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown';
+const sizeLabel = (bytes) => bytes < 1048576
+    ? `${(bytes / 1024).toFixed(1)} KB`
+    : `${(bytes / 1048576).toFixed(2)} MB`;
 /* ─────────── GET /api/files ─────────── */
-router.get('/', withAuth, withApproval, async (_req: Request, res: Response): Promise<void> => {
-    res.json(await store.getFiles());
+router.get('/', auth_1.withAuth, (_req, res) => {
+    res.json(index_1.store.getFiles());
 });
-
 /* ─────────── POST /api/files/upload ─────────── */
-router.post('/upload', withAuth, withApproval, (req: Request, res: Response): void => {
+router.post('/upload', auth_1.withAuth, (req, res) => {
     const ip = getIp(req);
-
     upload.single('file')(req, res, async (err) => {
         if (err) {
-            const message = err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE'
+            const message = err instanceof multer_1.default.MulterError && err.code === 'LIMIT_FILE_SIZE'
                 ? 'File size exceeds 10 MB limit'
                 : err.message || 'Upload failed';
             res.status(400).json({ error: message });
             return;
         }
-
         if (!req.file) {
             res.status(400).json({ error: 'No file provided' });
             return;
         }
-
-        const user = req.user!;
-        const safeName = sanitizeFilename(req.file.originalname);
-
+        const user = req.user;
+        const safeName = (0, validation_1.sanitizeFilename)(req.file.originalname);
         /* Check Cloudinary credentials are configured */
-        const cloudConfigured =
-            process.env.CLOUDINARY_CLOUD_NAME &&
+        const cloudConfigured = process.env.CLOUDINARY_CLOUD_NAME &&
             process.env.CLOUDINARY_CLOUD_NAME !== 'your_cloud_name';
-
-        let cloudUrl: string | undefined;
-        let cloudinaryPublicId: string | undefined;
-
+        let cloudUrl;
+        let cloudinaryPublicId;
         if (cloudConfigured) {
             try {
-                const result = await uploadToCloudinary(
-                    req.file.buffer,
-                    safeName,
-                    req.file.mimetype
-                );
+                const result = await (0, cloudinary_1.uploadToCloudinary)(req.file.buffer, safeName, req.file.mimetype);
                 cloudUrl = result.url;
                 cloudinaryPublicId = result.publicId;
-            } catch (uploadErr) {
+            }
+            catch (uploadErr) {
                 console.error('[Cloudinary] Upload error:', uploadErr);
                 res.status(502).json({ error: 'Cloud storage upload failed. Check Cloudinary credentials.' });
                 return;
             }
         }
-
-        const record = await store.addFile({
-            id: uuid(),
+        const record = index_1.store.addFile({
+            id: (0, uuid_1.v4)(),
             name: safeName,
             originalName: req.file.originalname,
             mimeType: req.file.mimetype,
@@ -92,15 +76,14 @@ router.post('/upload', withAuth, withApproval, (req: Request, res: Response): vo
             sizeLabel: sizeLabel(req.file.size),
             uploadedBy: user.sub,
             uploadedByEmail: user.email,
-            uploadedAt: new Date(),
+            uploadedAt: new Date().toISOString(),
             encryptedBy: 'AES-256',
             status: 'secure',
             path: cloudUrl || 'in-memory-only', // no local disk
             cloudinaryPublicId,
             cloudUrl,
         });
-
-        await store.addAuditLog({
+        index_1.store.addAuditLog({
             event: 'file_uploaded',
             userId: user.sub,
             userEmail: user.email,
@@ -113,50 +96,49 @@ router.post('/upload', withAuth, withApproval, (req: Request, res: Response): vo
                 storage: cloudConfigured ? 'cloudinary' : 'memory',
             },
         });
-
         res.status(201).json(record);
     });
 });
-
 /* ─────────── GET /api/files/:id/download ─────────── */
-router.get('/:id/download', withAuth, withApproval, async (req: Request, res: Response): Promise<void> => {
-    const file = await store.getFileById(req.params['id'] as string);
-    if (!file) { res.status(404).json({ error: 'File not found' }); return; }
-
+router.get('/:id/download', auth_1.withAuth, (req, res) => {
+    const file = index_1.store.getFileById(req.params['id']);
+    if (!file) {
+        res.status(404).json({ error: 'File not found' });
+        return;
+    }
     if (file.cloudinaryPublicId) {
         /* Generate a 15-minute signed Cloudinary URL */
-        const signedUrl = getSignedUrl(file.cloudinaryPublicId, file.mimeType);
+        const signedUrl = (0, cloudinary_1.getSignedUrl)(file.cloudinaryPublicId, file.mimeType);
         res.json({ url: signedUrl, fileName: file.originalName });
-    } else {
+    }
+    else {
         res.status(400).json({ error: 'File is a seed record and cannot be downloaded' });
     }
 });
-
 /* ─────────── DELETE /api/files/:id ─────────── */
-router.delete('/:id', withAuth, withApproval, async (req: Request, res: Response): Promise<void> => {
+router.delete('/:id', auth_1.withAuth, async (req, res) => {
     const ip = getIp(req);
-    const file = await store.getFileById(req.params['id'] as string);
-
-    if (!file) { res.status(404).json({ error: 'File not found' }); return; }
-
-    const user = req.user!;
+    const file = index_1.store.getFileById(req.params['id']);
+    if (!file) {
+        res.status(404).json({ error: 'File not found' });
+        return;
+    }
+    const user = req.user;
     if (file.uploadedBy !== user.sub && user.role !== 'admin') {
         res.status(403).json({ error: 'You do not have permission to delete this file' });
         return;
     }
-
     /* Delete from Cloudinary if stored there */
     if (file.cloudinaryPublicId) {
         try {
-            await deleteFromCloudinary(file.cloudinaryPublicId, file.mimeType);
-        } catch (e) {
+            await (0, cloudinary_1.deleteFromCloudinary)(file.cloudinaryPublicId, file.mimeType);
+        }
+        catch (e) {
             console.error('[Cloudinary] Delete error:', e);
         }
     }
-
-    await store.deleteFile(file.id);
-
-    await store.addAuditLog({
+    index_1.store.deleteFile(file.id);
+    index_1.store.addAuditLog({
         event: 'file_deleted',
         userId: user.sub,
         userEmail: user.email,
@@ -165,8 +147,6 @@ router.delete('/:id', withAuth, withApproval, async (req: Request, res: Response
         severity: 'warning',
         meta: { fileName: file.originalName },
     });
-
     res.json({ ok: true, message: `File '${file.originalName}' deleted` });
 });
-
-export default router;
+exports.default = router;

@@ -1,10 +1,10 @@
 'use client';
 import { useState } from 'react';
-import { FileItem } from '@/lib/mockData';
+import { FileRecord } from '@/lib/apiClient';
 import { Download, Trash2, CheckCircle, AlertCircle, Clock } from 'lucide-react';
 
 interface FileTableProps {
-    files: FileItem[];
+    files: any[]; // Keeping any[] for simplicity in mapping if needed, or use FileRecord[]
     onDelete?: (id: string) => void;
 }
 
@@ -19,7 +19,7 @@ const typeColors: Record<string, string> = {
 };
 
 export default function FileTable({ files, onDelete }: FileTableProps) {
-    const [sortCol, setSortCol] = useState<keyof FileItem>('uploadedAt');
+    const [sortCol, setSortCol] = useState<string>('uploadedAt');
     const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
     const sorted = [...files].sort((a, b) => {
@@ -27,12 +27,12 @@ export default function FileTable({ files, onDelete }: FileTableProps) {
         return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
     });
 
-    const toggle = (col: keyof FileItem) => {
+    const toggle = (col: string) => {
         if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
         else { setSortCol(col); setSortDir('asc'); }
     };
 
-    const TH = ({ label, col }: { label: string; col: keyof FileItem }) => (
+    const TH = ({ label, col }: { label: string; col: string }) => (
         <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider cursor-pointer select-none"
             style={{ color: '#6b82a8' }} onClick={() => toggle(col)}>
             {label} {sortCol === col ? (sortDir === 'asc' ? '↑' : '↓') : ''}
@@ -54,7 +54,8 @@ export default function FileTable({ files, onDelete }: FileTableProps) {
                 </thead>
                 <tbody>
                     {sorted.map((file, i) => {
-                        const { label, color, Icon } = statusConfig[file.status];
+                        const status = file.status as 'secure' | 'scanning' | 'flagged';
+                        const { label, color, Icon } = statusConfig[status];
                         return (
                             <tr key={file.id} className="transition-colors"
                                 style={{ background: i % 2 === 0 ? 'rgba(6,13,31,0.6)' : 'rgba(13,27,53,0.4)', borderTop: '1px solid rgba(0,200,255,0.06)' }}

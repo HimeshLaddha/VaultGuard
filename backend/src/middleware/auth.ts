@@ -29,6 +29,18 @@ export const withAuth = (req: Request, res: Response, next: NextFunction): void 
     }
 };
 
+/* ── withApproval: ensures user is APPROVED — call AFTER withAuth ── */
+export const withApproval = (req: Request, res: Response, next: NextFunction): void => {
+    if (!req.user || req.user.status !== 'APPROVED') {
+        res.status(403).json({
+            error: 'Account pending approval. Please contact an administrator.',
+            code: 'PENDING_APPROVAL'
+        });
+        return;
+    }
+    next();
+};
+
 /* ── withPreAuth: validates pre-auth token (after password, before MFA) ── */
 export const withPreAuth = (req: Request, res: Response, next: NextFunction): void => {
     const token = req.cookies?.preAuthToken as string | undefined;

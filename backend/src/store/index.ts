@@ -1,17 +1,26 @@
 import { v4 as uuid } from 'uuid';
 import bcrypt from 'bcryptjs';
+import User, { IUser } from '../models/User';
+import File, { IFile } from '../models/File';
+import AuditLog from '../models/AuditLog';
 
 /* ─────────────────────────────── Types ─────────────────────────────── */
 export type Role = 'admin' | 'user';
+export type UserStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 
-export interface User {
+// Keep the interfaces for external use, but the models will implement Document
+export interface UserRecord {
     id: string;
     email: string;
     passwordHash: string;
     name: string;
     role: Role;
-    mfaSecret: string; // TOTP secret (mock: static 6-digit code)
-    createdAt: string;
+    mfaSecret?: string;
+    mfaCode?: string;
+    mfaExpires?: number;
+    isVerified: boolean;
+    status: UserStatus;
+    createdAt: Date;
 }
 
 export interface FileRecord {
@@ -21,110 +30,195 @@ export interface FileRecord {
     mimeType: string;
     size: number;
     sizeLabel: string;
-    uploadedBy: string; // user id
+    uploadedBy: string;
     uploadedByEmail: string;
-    uploadedAt: string;
+    uploadedAt: Date;
     encryptedBy: string;
     status: 'secure' | 'scanning' | 'flagged';
-    path: string;            // kept for backward compat with seed data
-    cloudinaryPublicId?: string;  // set when stored in Cloudinary
-    cloudUrl?: string;            // Cloudinary secure URL
+    path: string;
+    cloudinaryPublicId?: string;
+    cloudUrl?: string;
 }
 
-export type Severity = 'info' | 'warning' | 'critical';
-
 export interface AuditLogEntry {
-    id: string;
+    id: string; // We'll map the Mongoose _id or keep the custom id field
     event: string;
     userId: string;
     userEmail: string;
     ip: string;
     location: string;
-    severity: Severity;
-    timestamp: string; // UTC ISO string
+    severity: 'info' | 'warning' | 'critical';
+    timestamp: Date;
     meta?: Record<string, unknown>;
 }
 
-/* ─────────────────────────────── Seed Data ─────────────────────────── */
+/* ─────────────────────────────── Seed Utility ────────────────────────── */
 
-const adminHash = bcrypt.hashSync('password123', 10);
-const userHash = bcrypt.hashSync('user1234', 10);
+export const seedDatabase = async () => {
+    const adminExists = await User.findOne({ email: 'admin@vault.io' });
+    if (!adminExists) {
+        console.log('Seeding default Admin user...');
+        const adminHash = await bcrypt.hash('password123', 10);
+        await User.create({
+            id: 'usr_admin_01',
+            email: 'admin@vault.io',
+            passwordHash: adminHash,
+            name: 'Admin User',
+            role: 'admin',
+            mfaSecret: '247831',
+            isVerified: true,
+            status: 'APPROVED',
+        });
+    }
 
-const ADMIN_ID = 'usr_admin_001';
-const USER_ID = 'usr_user_002';
+    const userExists = await User.findOne({ email: 'user@vault.io' });
+    if (!userExists) {
+        console.log('Seeding default Regular user...');
+        const userHash = await bcrypt.hash('user1234', 10);
+        await User.create({
+            id: 'usr_user_02',
+            email: 'user@vault.io',
+            passwordHash: userHash,
+            name: 'Regular User',
+            role: 'user',
+            mfaSecret: '112233',
+            isVerified: true,
+            status: 'APPROVED',
+        });
+    }
 
-const users: User[] = [
-    {
-        id: ADMIN_ID,
-        email: 'admin@vault.io',
-        passwordHash: adminHash,
-        name: 'Admin User',
-        role: 'admin',
-        mfaSecret: '247831', // fixed demo code
-        createdAt: '2025-01-01T00:00:00Z',
-    },
-    {
-        id: USER_ID,
-        email: 'user@vault.io',
-        passwordHash: userHash,
-        name: 'Regular User',
-        role: 'user',
-        mfaSecret: '112233',
-        createdAt: '2025-06-01T00:00:00Z',
-    },
-];
+    // Seed mock files
+    const filesCount = await File.countDocuments();
+    if (filesCount === 0) {
+        console.log('Seeding legacy mock files...');
+        const mockFiles = [
+            { name: 'Q4_Financial_Report.pdf', size: 3.2, type: 'PDF', uploadedAt: '2026-02-20 09:14', status: 'secure' },
+            { name: 'Employee_Contracts_2026.docx', size: 1.8, type: 'DOCX', uploadedAt: '2026-02-19 17:42', status: 'secure' },
+            { name: 'Infrastructure_Diagram.png', size: 5.1, type: 'PNG', uploadedAt: '2026-02-19 11:05', status: 'secure' },
+            { name: 'Compliance_Audit_2025.pdf', size: 8.7, type: 'PDF', uploadedAt: '2026-02-18 14:30', status: 'scanning' },
+            { name: 'Product_Roadmap_Confidential.docx', size: 2.4, type: 'DOCX', uploadedAt: '2026-02-18 08:21', status: 'secure' },
+            { name: 'Server_Access_Logs_Jan.txt', size: 0.9, type: 'TXT', uploadedAt: '2026-02-17 22:15', status: 'flagged' },
+            { name: 'Board_Meeting_Minutes.pdf', size: 1.1, type: 'PDF', uploadedAt: '2026-02-17 16:48', status: 'secure' },
+            { name: 'API_Keys_Backup.txt', size: 0.2, type: 'TXT', uploadedAt: '2026-02-16 10:33', status: 'flagged' },
+        ];
 
-const sizeLabel = (bytes: number) =>
-    bytes < 1_048_576
-        ? `${(bytes / 1024).toFixed(1)} KB`
-        : `${(bytes / 1_048_576).toFixed(2)} MB`;
+        for (const f of mockFiles) {
+            const mimeMap: Record<string, string> = {
+                'PDF': 'application/pdf',
+                'DOCX': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                'PNG': 'image/png',
+                'TXT': 'text/plain'
+            };
+            await File.create({
+                id: uuid(),
+                name: f.name,
+                originalName: f.name,
+                mimeType: mimeMap[f.type] || 'application/octet-stream',
+                size: f.size * 1024 * 1024,
+                sizeLabel: `${f.size} MB`,
+                uploadedBy: 'usr_admin_01',
+                uploadedByEmail: 'admin@vault.io',
+                uploadedAt: new Date(f.uploadedAt),
+                encryptedBy: 'AES-256',
+                status: f.status,
+                path: 'in-memory-only'
+            });
+        }
+    }
 
-const files: FileRecord[] = [
-    { id: uuid(), name: 'q4_financial_report.pdf', originalName: 'Q4_Financial_Report.pdf', mimeType: 'application/pdf', size: 3_355_443, sizeLabel: '3.2 MB', uploadedBy: ADMIN_ID, uploadedByEmail: 'admin@vault.io', uploadedAt: '2026-02-20T03:44:00Z', encryptedBy: 'AES-256', status: 'secure', path: 'uploads/q4_financial_report.pdf' },
-    { id: uuid(), name: 'employee_contracts_2026.docx', originalName: 'Employee_Contracts_2026.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', size: 1_887_437, sizeLabel: '1.8 MB', uploadedBy: ADMIN_ID, uploadedByEmail: 'admin@vault.io', uploadedAt: '2026-02-19T12:12:00Z', encryptedBy: 'AES-256', status: 'secure', path: 'uploads/employee_contracts_2026.docx' },
-    { id: uuid(), name: 'infrastructure_diagram.png', originalName: 'Infrastructure_Diagram.png', mimeType: 'image/png', size: 5_348_147, sizeLabel: '5.1 MB', uploadedBy: ADMIN_ID, uploadedByEmail: 'admin@vault.io', uploadedAt: '2026-02-19T05:35:00Z', encryptedBy: 'AES-256', status: 'secure', path: 'uploads/infrastructure_diagram.png' },
-    { id: uuid(), name: 'compliance_audit_2025.pdf', originalName: 'Compliance_Audit_2025.pdf', mimeType: 'application/pdf', size: 9_123_456, sizeLabel: '8.7 MB', uploadedBy: ADMIN_ID, uploadedByEmail: 'admin@vault.io', uploadedAt: '2026-02-18T09:00:00Z', encryptedBy: 'AES-256', status: 'scanning', path: 'uploads/compliance_audit_2025.pdf' },
-    { id: uuid(), name: 'server_access_logs_jan.txt', originalName: 'Server_Access_Logs_Jan.txt', mimeType: 'text/plain', size: 943_718, sizeLabel: '0.9 MB', uploadedBy: ADMIN_ID, uploadedByEmail: 'admin@vault.io', uploadedAt: '2026-02-17T16:45:00Z', encryptedBy: 'AES-256', status: 'flagged', path: 'uploads/server_access_logs_jan.txt' },
-];
+    // Seed mock audit logs
+    const logsCount = await AuditLog.countDocuments();
+    if (logsCount === 0) {
+        console.log('Seeding legacy mock audit logs...');
+        const mockLogs = [
+            { event: 'User Login', user: 'admin@vault.io', ip: '192.168.1.101', location: 'New York, US', timestamp: '2026-02-20 14:08:33', severity: 'info' },
+            { event: 'File Uploaded', user: 'admin@vault.io', ip: '192.168.1.101', location: 'New York, US', timestamp: '2026-02-20 09:14:11', severity: 'info' },
+            { event: 'MFA Verified', user: 'admin@vault.io', ip: '192.168.1.101', location: 'New York, US', timestamp: '2026-02-20 09:13:58', severity: 'info' },
+            { event: 'Failed Login Attempt', user: 'unknown@intruder.net', ip: '45.33.32.156', location: 'Amsterdam, NL', timestamp: '2026-02-19 23:42:07', severity: 'critical' },
+            { event: 'Failed Login Attempt', user: 'unknown@intruder.net', ip: '45.33.32.156', location: 'Amsterdam, NL', timestamp: '2026-02-19 23:41:52', severity: 'critical' },
+            { event: 'File Downloaded', user: 'admin@vault.io', ip: '192.168.1.101', location: 'New York, US', timestamp: '2026-02-19 17:55:21', severity: 'info' },
+            { event: 'Password Changed', user: 'admin@vault.io', ip: '192.168.1.101', location: 'New York, US', timestamp: '2026-02-19 12:30:00', severity: 'warning' },
+            { event: 'API Key Accessed', user: 'admin@vault.io', ip: '10.0.0.15', location: 'New York, US', timestamp: '2026-02-18 08:25:44', severity: 'warning' },
+            { event: 'File Flagged', user: 'system', ip: 'internal', location: '–', timestamp: '2026-02-17 22:15:10', severity: 'critical' },
+            { event: 'User Logout', user: 'admin@vault.io', ip: '192.168.1.101', location: 'New York, US', timestamp: '2026-02-17 18:00:00', severity: 'info' },
+            { event: 'MFA Code Resent', user: 'admin@vault.io', ip: '192.168.1.101', location: 'New York, US', timestamp: '2026-02-17 09:33:19', severity: 'info' },
+            { event: 'New Session Started', user: 'admin@vault.io', ip: '192.168.1.102', location: 'New York, US', timestamp: '2026-02-16 08:10:05', severity: 'info' },
+        ];
 
-const auditLogs: AuditLogEntry[] = [
-    { id: uuid(), event: 'user_login', userId: ADMIN_ID, userEmail: 'admin@vault.io', ip: '192.168.1.101', location: 'New York, US', severity: 'info', timestamp: '2026-02-20T08:38:33Z' },
-    { id: uuid(), event: 'mfa_verified', userId: ADMIN_ID, userEmail: 'admin@vault.io', ip: '192.168.1.101', location: 'New York, US', severity: 'info', timestamp: '2026-02-20T08:38:58Z' },
-    { id: uuid(), event: 'file_uploaded', userId: ADMIN_ID, userEmail: 'admin@vault.io', ip: '192.168.1.101', location: 'New York, US', severity: 'info', timestamp: '2026-02-20T03:44:11Z', meta: { fileName: 'Q4_Financial_Report.pdf' } },
-    { id: uuid(), event: 'failed_auth', userId: 'unknown', userEmail: 'unknown@intruder.net', ip: '45.33.32.156', location: 'Amsterdam, NL', severity: 'critical', timestamp: '2026-02-19T18:12:07Z' },
-    { id: uuid(), event: 'failed_auth', userId: 'unknown', userEmail: 'unknown@intruder.net', ip: '45.33.32.156', location: 'Amsterdam, NL', severity: 'critical', timestamp: '2026-02-19T18:11:52Z' },
-    { id: uuid(), event: 'file_downloaded', userId: ADMIN_ID, userEmail: 'admin@vault.io', ip: '192.168.1.101', location: 'New York, US', severity: 'info', timestamp: '2026-02-19T12:25:21Z' },
-    { id: uuid(), event: 'mfa_failed', userId: ADMIN_ID, userEmail: 'admin@vault.io', ip: '192.168.1.101', location: 'New York, US', severity: 'warning', timestamp: '2026-02-19T09:10:00Z' },
-    { id: uuid(), event: 'file_flagged', userId: 'system', userEmail: 'system', ip: 'internal', location: '–', severity: 'critical', timestamp: '2026-02-17T16:45:10Z', meta: { fileName: 'Server_Access_Logs_Jan.txt' } },
-];
+        for (const l of mockLogs) {
+            await AuditLog.create({
+                id: uuid(),
+                event: l.event.toLowerCase().replace(/ /g, '_'),
+                userEmail: l.user,
+                userId: l.user === 'admin@vault.io' ? 'usr_admin_01' : 'system',
+                ip: l.ip,
+                location: l.location,
+                severity: l.severity,
+                timestamp: new Date(l.timestamp)
+            });
+        }
+    }
+};
 
 /* ─────────────────────────────── Store API ─────────────────────────── */
 export const store = {
     /* Users */
-    findUserByEmail: (email: string) =>
-        users.find((u) => u.email.toLowerCase() === email.toLowerCase()),
-    findUserById: (id: string) => users.find((u) => u.id === id),
+    findUserByEmail: async (email: string) =>
+        await User.findOne({ email: email.toLowerCase() }),
+
+    findUserById: async (id: string) =>
+        await User.findOne({ id }) || await User.findById(id),
+
+    addUser: async (userData: any) => {
+        const user = new User(userData);
+        return await user.save();
+    },
+
+    setUserMfa: async (userId: string, code: string, expires: number) => {
+        await User.findOneAndUpdate({ id: userId }, { mfaCode: code, mfaExpires: expires });
+    },
+
+    clearUserMfa: async (userId: string) => {
+        await User.findOneAndUpdate({ id: userId }, { $unset: { mfaCode: 1, mfaExpires: 1 } });
+    },
+
+    verifyUser: async (userId: string) => {
+        await User.findOneAndUpdate({ id: userId }, { isVerified: true });
+    },
+
+    setUserStatus: async (userId: string, status: UserStatus) => {
+        await User.findOneAndUpdate({ id: userId }, { status });
+    },
+
+    getPendingUsers: async () =>
+        await User.find({ status: 'PENDING' }),
 
     /* Files */
-    getFiles: () => [...files].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt)),
-    getFileById: (id: string) => files.find((f) => f.id === id),
-    addFile: (record: FileRecord) => { files.push(record); return record; },
-    deleteFile: (id: string) => {
-        const idx = files.findIndex((f) => f.id === id);
-        if (idx === -1) return false;
-        files.splice(idx, 1);
-        return true;
+    getFiles: async () =>
+        await File.find().sort({ uploadedAt: -1 }),
+
+    getFileById: async (id: string) =>
+        await File.findOne({ id }) || await File.findById(id),
+
+    addFile: async (fileData: any) => {
+        const file = new File(fileData);
+        return await file.save();
+    },
+
+    deleteFile: async (id: string) => {
+        const res = await File.deleteOne({ id });
+        return res.deletedCount > 0;
     },
 
     /* Audit Logs */
-    getAuditLogs: () => [...auditLogs].sort((a, b) => b.timestamp.localeCompare(a.timestamp)),
-    addAuditLog: (entry: Omit<AuditLogEntry, 'id' | 'timestamp'>) => {
-        const log: AuditLogEntry = {
-            id: uuid(),
-            timestamp: new Date().toISOString(),
+    getAuditLogs: async () =>
+        await AuditLog.find().sort({ timestamp: -1 }),
+
+    addAuditLog: async (entry: any) => {
+        const log = new AuditLog({
             ...entry,
-        };
-        auditLogs.unshift(log);
-        return log;
+            id: uuid()
+        });
+        return await log.save();
     },
 };

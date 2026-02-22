@@ -1,6 +1,6 @@
 # VaultGuard 🔐
 
-A secure document management platform with JWT authentication, MFA, role-based access control, Cloudinary cloud storage, and immutable audit logging.
+A production-grade secure document management platform with JWT authentication, email-based MFA, admin-approval registration, role-based access control, Cloudinary cloud storage, MongoDB persistence, and immutable audit logging.
 
 ---
 
@@ -12,6 +12,7 @@ A secure document management platform with JWT authentication, MFA, role-based a
 - [Setup](#setup)
 - [Environment Variables](#environment-variables)
 - [Running the App](#running-the-app)
+- [User Flows](#user-flows)
 - [Demo Credentials](#demo-credentials)
 - [API Reference](#api-reference)
 - [Security Architecture](#security-architecture)
@@ -22,26 +23,34 @@ A secure document management platform with JWT authentication, MFA, role-based a
 
 | Feature | Details |
 |---|---|
+| **Registration + Admin Approval** | New users register → admin approves → user can log in |
+| **Email-Based MFA** | Real 6-digit OTP sent via Gmail SMTP on every login |
 | **Two-Phase Auth** | Password login → MFA code → JWT access token |
 | **HTTP-only Cookies** | Tokens stored in `HttpOnly; SameSite=Strict` cookies |
-| **RBAC** | Admin role can view audit logs; users cannot |
+| **RBAC** | Admin can approve users, view & export audit logs |
+| **MongoDB Persistence** | All users, files, and audit logs stored in MongoDB |
 | **Cloud Storage** | Files uploaded directly to Cloudinary (no local disk) |
 | **Audit Log** | Immutable log of every login, upload, deletion, and failure |
 | **Audit Export** | Download full audit log as CSV or JSON |
 | **File Validation** | Type allowlist (PDF, DOCX, PNG, JPG, TXT) + 10 MB cap |
 | **Input Validation** | Zod schemas on every endpoint |
 | **Security Headers** | Helmet.js (HSTS, CSP, X-Frame-Options, etc.) |
+| **Rate Limiting** | Auth, upload, and global limiters to prevent brute-force |
 
 ---
 
 ## Project Structure
 
 ```
-project/
+VaultGuard/
 ├── frontend/                  ← Next.js 14 (App Router) — port 3000
 │   ├── app/
-│   │   ├── login/page.tsx
-│   │   ├── login/mfa/page.tsx
+│   │   ├── page.tsx            (landing page)
+│   │   ├── register/page.tsx   (self-service registration)
+│   │   ├── login/page.tsx      (email + password)
+│   │   ├── login/mfa/page.tsx  (6-digit OTP — shows real user email)
+│   │   ├── pending-approval/   (waiting room after registration)
+│   │   ├── admin/page.tsx      (approve pending users)
 │   │   └── dashboard/
 │   │       ├── page.tsx        (overview + audit log)
 │   │       ├── files/page.tsx  (file manager)
@@ -54,20 +63,24 @@ project/
 │   ├── lib/apiClient.ts        (typed fetch wrapper)
 │   └── .env.local              (NEXT_PUBLIC_API_URL)
 │
-└── backend/                   ← Express + TypeScript — port 5000
+└── backend/                   ← Express + TypeScript — port 5001
     └── src/
-        ├── store/index.ts      (in-memory DB — swap for real DB)
+        ├── models/             (Mongoose schemas: User, File, AuditLog)
+        ├── store/index.ts      (MongoDB store API + seed on first run)
         ├── utils/
         │   ├── auth.ts         (JWT sign/verify + cookie helpers)
+        │   ├── mailer.ts       (Nodemailer + Gmail SMTP)
         │   ├── validation.ts   (Zod schemas + filename sanitizer)
         │   └── cloudinary.ts   (upload / signed URL / delete)
-        ├── middleware/auth.ts  (withAuth, withPreAuth, withRole)
+        ├── middleware/
+        │   ├── auth.ts         (withAuth, withPreAuth, withRole, withApproval)
+        │   └── rateLimit.ts    (auth, upload, global limiters)
         ├── routes/
-        │   ├── auth.ts         (login, mfa, logout, me)
+        │   ├── auth.ts         (register, verify-email, login, mfa, approve-user, me)
         │   ├── files.ts        (list, upload, download, delete)
         │   └── audit.ts        (get logs, export CSV/JSON)
-        ├── app.ts              (Express setup)
-        └── server.ts           (entry point)
+        ├── app.ts              (Express setup + Helmet + CORS)
+        └── server.ts           (entry point + DB connect)
 ```
 
 ---
@@ -76,7 +89,9 @@ project/
 
 - **Node.js** v18 or later
 - **npm** v9 or later
+- **MongoDB** running locally (`mongodb://localhost:27017`) or a MongoDB Atlas URI
 - A free **Cloudinary** account → [cloudinary.com](https://cloudinary.com)
+- A **Gmail** account with an [App Password](https://myaccount.google.com/apppasswords) for SMTP
 
 ---
 
@@ -85,14 +100,14 @@ project/
 ### 1. Install backend dependencies
 
 ```bash
-cd project/backend
+cd VaultGuard/backend
 npm install
 ```
 
 ### 2. Install frontend dependencies
 
 ```bash
-cd project/frontend
+cd VaultGuard/frontend
 npm install
 ```
 
@@ -107,11 +122,21 @@ PORT=5000
 NODE_ENV=development
 FRONTEND_URL=http://localhost:3000
 
-# Get these from cloudinary.com → Dashboard
+# MongoDB
+MONGODB_URI=mongodb://localhost:27017/vaultguard
+
+# Cloudinary — get from cloudinary.com → Dashboard
 CLOUDINARY_CLOUD_NAME=<your_cloud_name>
 CLOUDINARY_API_KEY=<your_api_key>
 CLOUDINARY_API_SECRET=<your_api_secret>
 CLOUDINARY_FOLDER=vaultguard
+
+# Gmail SMTP — use an App Password, not your real password
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=465
+SMTP_SECURE=true
+SMTP_USER=<your_gmail>@gmail.com
+SMTP_PASS=<your_16_char_app_password>
 ```
 
 #### Frontend — `frontend/.env.local`
@@ -127,8 +152,10 @@ NEXT_PUBLIC_API_URL=http://localhost:5000
 ### Terminal 1 — Backend
 
 ```bash
-cd project/backend
-npx ts-node --transpile-only src/server.ts
+cd VaultGuard/backend
+$env:PORT=5000; npm run server   # PowerShell
+# or
+PORT=5000 npm run server         # bash
 ```
 
 Expected output:
@@ -136,12 +163,13 @@ Expected output:
 VaultGuard API running on http://localhost:5000
    Environment : development
    Health check: http://localhost:5000/api/health
+✅ MongoDB connected  
 ```
 
 ### Terminal 2 — Frontend
 
 ```bash
-cd project/frontend
+cd VaultGuard/frontend  
 npm run dev
 ```
 
@@ -151,11 +179,32 @@ Then open **http://localhost:3000**
 
 ---
 
+## User Flows
+
+### New User Registration
+
+1. Navigate to `/register` and fill in name, email, password.
+2. A 6-digit verification code is sent to your email.
+3. Enter the code to verify your email.
+4. Your account status becomes `PENDING` — you'll see a "waiting for approval" screen.
+5. Admin logs in and approves your account from `/admin`.
+6. You can now log in normally.
+
+### Login (MFA)
+
+1. Navigate to `/login`, enter email + password.
+2. A fresh 6-digit OTP is emailed to **your** registered address (expires in 5 min).
+3. Enter the OTP on the MFA page — the page shows your actual email (masked).
+4. On success you are redirected to the dashboard.
+
+---
+
 ## Demo Credentials
 
-> These are seeded into the in-memory store on every server start.
+> The admin account is seeded into MongoDB on first run. Regular users must register.
 
 ### Admin Account
+
 | Field | Value |
 |---|---|
 | Email | `admin@vault.io` |
@@ -177,10 +226,14 @@ Then open **http://localhost:3000**
 
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
-| `POST` | `/api/auth/login` | — | Validate credentials, set pre-auth cookie |
-| `POST` | `/api/auth/mfa` | pre-auth | Verify 6-digit code, set access cookie |
+| `POST` | `/api/auth/register` | — | Register a new user, sends email OTP |
+| `POST` | `/api/auth/verify-email` | — | Verify email OTP after registration |
+| `POST` | `/api/auth/login` | — | Validate credentials, set pre-auth cookie, send MFA email |
+| `POST` | `/api/auth/mfa` | pre-auth | Verify 6-digit OTP, set access cookie |
 | `POST` | `/api/auth/logout` | access | Clear all cookies |
 | `GET` | `/api/auth/me` | access | Return current user info |
+| `GET` | `/api/auth/pending-users` | admin | List users awaiting approval |
+| `POST` | `/api/auth/approve-user` | admin | Approve a pending user |
 | `GET` | `/api/files` | access | List all files |
 | `POST` | `/api/files/upload` | access | Upload file to Cloudinary |
 | `GET` | `/api/files/:id/download` | access | Get 15-min signed Cloudinary URL |
@@ -200,12 +253,13 @@ Browser
   │  HTTP-only cookies (SameSite=Strict)
   ▼
 Express Backend
-  ├── helmet()        → HSTS, CSP, X-Frame-Options headers
-  ├── CORS            → restricted to FRONTEND_URL only
-  ├── withPreAuth     → validates pre-auth JWT (after password step)
-  ├── withAuth        → validates access JWT (full session)
+  ├── helmet()          → HSTS, CSP, X-Frame-Options headers
+  ├── CORS              → restricted to FRONTEND_URL only
+  ├── withPreAuth       → validates pre-auth JWT (after password step)
+  ├── withAuth          → validates access JWT (full session)
+  ├── withApproval      → blocks PENDING/REJECTED users
   ├── withRole('admin') → RBAC guard
-  ├── Zod schemas     → input validation on every route
+  ├── Zod schemas       → input validation on every route
   └── Multer (memoryStorage) → buffer only, never writes to disk
         │
         └── Cloudinary SDK → files stored in cloud, not locally
@@ -216,49 +270,30 @@ Express Backend
 ```
 POST /login ──────► pre-auth cookie (5 min) ──► POST /mfa ──► access cookie (8 h)
                          │                              │
-                    (password OK)                  (MFA code OK)
+                    (password OK +              (MFA OTP OK)
+                     APPROVED status)
 ```
 
-### File Handling
+### Email MFA Flow
 
-- Files held in memory by multer (never written to disk)
-- Uploaded to Cloudinary via base64 data URI
-- Downloads served as 15-minute signed URLs through the API
-- Deletion removes file from both the store and Cloudinary
-
----
-
-## Replacing the In-Memory Store
-
-The `backend/src/store/index.ts` file acts as a simple in-memory database. To connect a real database (MongoDB, PostgreSQL, etc.):
-
-1. Replace the `users`, `files`, and `auditLogs` arrays with database queries
-2. Update the store helper functions (`findUserByEmail`, `addFile`, etc.) to use your ORM/client
-3. No route code needs to change — routes only call store functions
+```
+/login validates password
+  └─► Generates random 6-digit OTP
+  └─► Stores OTP + 5-min expiry in MongoDB
+  └─► Sends OTP to user.email via Gmail SMTP
+  └─► Frontend MFA page reads email from sessionStorage and masks it
+  └─► User submits OTP → /mfa clears token, issues access JWT
+```
 
 ---
 
 ## Security Features
 
-### Two-Phase MFA Authentication
+### Registration & Admin Approval
 
-Authentication is split into two distinct JWT-gated steps to prevent single-token compromise:
-
-```
-Step 1 — POST /api/auth/login
-  ├── Validates credentials with bcrypt.compare() (constant-time)
-  ├── Never reveals whether the email exists (generic error)
-  └── Issues a short-lived pre-auth JWT (5 min) in an HttpOnly cookie
-
-Step 2 — POST /api/auth/mfa
-  ├── Validates the pre-auth JWT (withPreAuth middleware)
-  ├── Checks the 6-digit TOTP code against the user's stored secret
-  └── Issues a full access JWT (8 h) and clears the pre-auth cookie
-```
-
-If an attacker steals the pre-auth cookie they still cannot access any protected data — only the MFA endpoint accepts it, and it expires in 5 minutes.
-
----
+All new accounts are `PENDING` by default. Only an admin can set status to `APPROVED`. Unapproved accounts:
+- Cannot reach the MFA step (blocked with `403` before any OTP is sent)
+- Cannot access any authenticated endpoint
 
 ### Input Sanitization
 
@@ -267,30 +302,19 @@ If an attacker steals the pre-auth cookie they still cannot access any protected
 | Schema | Fields validated |
 |---|---|
 | `LoginSchema` | `email` (valid format, max 254 chars), `password` (non-empty, max 128 chars) |
+| `RegisterSchema` | `name`, `email`, `password` (min 8 chars, complexity) |
 | `MfaSchema` | `code` (exactly 6 digits, `/^\d{6}$/`) |
-| Multer `fileFilter` | MIME type matched against allowlist (PDF, DOCX, PNG, JPG, TXT) |
-
-**Filename sanitizer** (`sanitizeFilename`) strips all path traversal characters (`../`, `/`, `\`, null bytes) before storing the filename — prevents both directory traversal and directory injection attacks.
-
----
 
 ### Role-Based Access Control (RBAC)
 
-Access control is enforced at the route level via the `withRole(role)` middleware:
-
 ```
-GET  /api/audit            → withAuth + withRole('admin') → 403 for non-admins
-GET  /api/audit/export     → withAuth + withRole('admin') → 403 for non-admins
-DELETE /api/files/:id      → withAuth + ownership check OR admin role
+POST /api/auth/approve-user  → withAuth + withRole('admin')
+GET  /api/audit              → withAuth + withRole('admin') → 403 for non-admins
+GET  /api/audit/export       → withAuth + withRole('admin') → 403 for non-admins
+DELETE /api/files/:id        → withAuth + ownership check OR admin role
 ```
-
-User role is embedded in the JWT payload at login and re-checked on every request — it is never trusted from the client request body.
-
----
 
 ### Rate Limiting
-
-Three independent limiters prevent brute-force and DoS attacks:
 
 | Limiter | Endpoints | Window | Max requests |
 |---|---|---|---|
@@ -298,20 +322,15 @@ Three independent limiters prevent brute-force and DoS attacks:
 | Upload limiter | `POST /api/files/upload` | 1 hour | 20 |
 | Global limiter | All `/api/*` endpoints | 15 minutes | 200 |
 
-Returns `429 Too Many Requests` with a descriptive JSON error when exceeded.
-
----
-
 ### HTTP Security Headers (Helmet.js)
 
-| Header | Value | Purpose |
-|---|---|---|
-| `Content-Security-Policy` | `default-src 'self'` + Cloudinary for images | Blocks XSS, data injection |
-| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` (prod only) | Forces HTTPS |
-| `X-Frame-Options` | `DENY` | Prevents clickjacking |
-| `X-Content-Type-Options` | `nosniff` | Prevents MIME sniffing |
-| `Referrer-Policy` | `no-referrer` | No referrer leakage |
-| `X-Powered-By` | *(removed)* | Hides framework fingerprint |
+| Header | Purpose |
+|---|---|
+| `Content-Security-Policy` | Blocks XSS, data injection |
+| `Strict-Transport-Security` | Forces HTTPS (production only) |
+| `X-Frame-Options: DENY` | Prevents clickjacking |
+| `X-Content-Type-Options: nosniff` | Prevents MIME sniffing |
+| `Referrer-Policy: no-referrer` | No referrer leakage |
 
 ---
 
@@ -320,11 +339,12 @@ Returns `429 Too Many Requests` with a descriptive JSON error when exceeded.
 ### Build both apps
 
 ```bash
-# From project root
-npm run build
-```
+# Backend
+cd VaultGuard/backend && npm run build
 
-This runs `tsc` (backend) and `next build` (frontend) in sequence.
+# Frontend
+cd VaultGuard/frontend && npm run build
+```
 
 ### Start for production
 
@@ -336,12 +356,13 @@ cd backend && NODE_ENV=production node dist/server.js
 cd frontend && npm run start
 ```
 
-### Quick checklist before going live
+### Checklist before going live
 
-- [ ] Replace all demo credentials in `store/index.ts` with real users + bcrypt hashes
 - [ ] Set `NODE_ENV=production` — enables HSTS and disables dev-only logging
 - [ ] Generate strong JWT secrets: `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`
 - [ ] Set `FRONTEND_URL` to your production domain
-- [ ] Store all `.env` secrets in your hosting provider's secrets manager (never commit)
+- [ ] Use a dedicated Gmail App Password — never commit credentials
+- [ ] Point `MONGODB_URI` to a production Atlas cluster
+- [ ] Store all `.env` secrets in your hosting provider's secrets manager
 - [ ] Point `CLOUDINARY_FOLDER` to a production-specific folder
 - [ ] Enable Cloudinary's upload restrictions to only allow server-side uploads

@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import Sidebar from '@/components/Sidebar';
 import StatusBadge from '@/components/StatusBadge';
@@ -27,6 +28,7 @@ const AuditLogTable = dynamic(() => import('@/components/AuditLogTable'), {
 });
 
 export default function DashboardPage() {
+    const router = useRouter();
     const [files, setFiles] = useState<FileRecord[]>([]);
     const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
     const [loadingFiles, setLoadingFiles] = useState(true);
@@ -35,16 +37,23 @@ export default function DashboardPage() {
     const [auditError, setAuditError] = useState('');
 
     useEffect(() => {
+        const handleAuthError = (e: any) => {
+            if (e.message.includes('PENDING_APPROVAL') || e.message.includes('Account pending approval')) {
+                router.push('/pending-approval');
+            }
+            return e.message;
+        };
+
         api.getFiles()
             .then(setFiles)
-            .catch(e => setFileError(e.message))
+            .catch(e => setFileError(handleAuthError(e)))
             .finally(() => setLoadingFiles(false));
 
         api.getAuditLogs()
             .then(setAuditLogs)
-            .catch(e => setAuditError(e.message))
+            .catch(e => setAuditError(handleAuthError(e)))
             .finally(() => setLoadingLogs(false));
-    }, []);
+    }, [router]);
 
     const handleDelete = async (id: string) => {
         try {

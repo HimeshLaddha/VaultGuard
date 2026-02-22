@@ -2,7 +2,7 @@
 import { useState, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Shield, Eye, EyeOff, Mail, Lock, ChevronRight } from 'lucide-react';
+import { Shield, Eye, EyeOff, Mail, Lock, User, ChevronRight } from 'lucide-react';
 import { api } from '@/lib/apiClient';
 
 interface FieldProps {
@@ -40,20 +40,28 @@ function Field({ id, label, icon: Icon, type, value, onChange, error, placeholde
     );
 }
 
-export default function LoginPage() {
+export default function RegisterPage() {
     const router = useRouter();
+    const [name, setName] = useState('');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [showPw, setShowPw] = useState(false);
-    const [errors, setErrors] = useState<{ email?: string; password?: string; form?: string }>({});
+    const [errors, setErrors] = useState<{ name?: string; email?: string; password?: string; form?: string }>({});
     const [loading, setLoading] = useState(false);
 
     const validate = () => {
         const e: typeof errors = {};
+        if (!name) e.name = 'Name is required.';
+        else if (name.length < 2) e.name = 'Name must be at least 2 characters.';
+
         if (!email) e.email = 'Email is required.';
         else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) e.email = 'Please enter a valid email address.';
+
         if (!password) e.password = 'Password is required.';
         else if (password.length < 8) e.password = 'Password must be at least 8 characters.';
+        else if (!/[A-Z]/.test(password)) e.password = 'Must contain at least one uppercase letter.';
+        else if (!/[0-9]/.test(password)) e.password = 'Must contain at least one number.';
+
         return e;
     };
 
@@ -64,23 +72,21 @@ export default function LoginPage() {
         setErrors({});
         setLoading(true);
         try {
-            const res = await api.login(email, password);
-            // Persist email so MFA page can display the correct masked address
-            sessionStorage.setItem('mfa_email', res.email || email);
-            router.push('/login/mfa');
+            await api.register(name, email, password);
+            // Save email to localStorage temporarily for verification page
+            localStorage.setItem('pending_verify_email', email);
+            router.push('/register/verify');
         } catch (err: unknown) {
-            setErrors({ form: err instanceof Error ? err.message : 'Login failed' });
+            setErrors({ form: err instanceof Error ? err.message : 'Registration failed' });
         } finally {
             setLoading(false);
         }
     };
 
-
-
     return (
         <div className="min-h-screen flex items-center justify-center px-4 py-12 relative" style={{ background: '#060d1f' }}>
             {/* Background glow */}
-            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[400px] rounded-full opacity-15 pointer-events-none" style={{ background: 'radial-gradient(ellipse, #a78bfa 0%, transparent 70%)' }} />
+            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[400px] rounded-full opacity-15 pointer-events-none" style={{ background: 'radial-gradient(ellipse, #00c8ff 0%, transparent 70%)' }} />
 
             <div className="w-full max-w-md">
                 {/* Logo */}
@@ -91,13 +97,16 @@ export default function LoginPage() {
                         </div>
                         <span className="font-bold text-xl" style={{ color: '#e8f0ff' }}>VaultGuard</span>
                     </Link>
-                    <h1 className="text-2xl font-bold mb-1" style={{ color: '#e8f0ff' }}>Welcome back</h1>
-                    <p className="text-sm text-center" style={{ color: '#6b82a8' }}>Sign in to your secure vault</p>
+                    <h1 className="text-2xl font-bold mb-1" style={{ color: '#e8f0ff' }}>Create Account</h1>
+                    <p className="text-sm text-center" style={{ color: '#6b82a8' }}>Secure your data with zero-knowledge vault</p>
                 </div>
 
                 {/* Card */}
                 <div className="rounded-2xl p-8" style={{ background: 'rgba(13,27,53,0.8)', border: '1px solid rgba(0,200,255,0.12)', backdropFilter: 'blur(16px)' }}>
                     <form onSubmit={handleSubmit} noValidate className="space-y-5">
+                        <Field id="name" label="Full Name" icon={User} type="text"
+                            value={name} onChange={setName} error={errors.name} placeholder="John Doe" />
+
                         <Field id="email" label="Email Address" icon={Mail} type="email"
                             value={email} onChange={setEmail} error={errors.email} placeholder="you@example.com" />
 
@@ -117,14 +126,6 @@ export default function LoginPage() {
                             </div>
                         )}
 
-                        <div className="flex items-center justify-between pt-1">
-                            <label className="flex items-center gap-2 cursor-pointer">
-                                <input type="checkbox" className="w-4 h-4 rounded" style={{ accentColor: '#00c8ff' }} />
-                                <span className="text-xs" style={{ color: '#6b82a8' }}>Remember this device</span>
-                            </label>
-                            <a href="#" className="text-xs font-semibold" style={{ color: '#00c8ff' }}>Forgot password?</a>
-                        </div>
-
                         <button type="submit" disabled={loading}
                             className="w-full py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all mt-2"
                             style={{ background: loading ? 'rgba(0,200,255,0.3)' : 'linear-gradient(135deg, #00c8ff, #a78bfa)', color: '#060d1f' }}
@@ -133,15 +134,15 @@ export default function LoginPage() {
                             {loading ? (
                                 <span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
                             ) : (
-                                <>Continue <ChevronRight className="w-4 h-4" /></>
+                                <>Verify Email <ChevronRight className="w-4 h-4" /></>
                             )}
                         </button>
                     </form>
 
                     <div className="mt-6 text-center">
                         <p className="text-xs" style={{ color: '#6b82a8' }}>
-                            Don't have an account?{' '}
-                            <Link href="/register" style={{ color: '#00c8ff', fontWeight: 600 }}>Register</Link>
+                            Already have an account?{' '}
+                            <Link href="/login" style={{ color: '#00c8ff', fontWeight: 600 }}>Sign in</Link>
                         </p>
                     </div>
                 </div>

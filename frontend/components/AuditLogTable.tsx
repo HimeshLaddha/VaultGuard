@@ -1,19 +1,10 @@
 'use client';
 import { useState } from 'react';
 import { Info, AlertTriangle, XCircle, ChevronLeft, ChevronRight, Download } from 'lucide-react';
-
-interface AuditLog {
-    id: string;
-    event: string;
-    user: string;
-    ip: string;
-    location: string;
-    timestamp: string;
-    severity: 'info' | 'warning' | 'critical';
-}
+import { AuditLogEntry } from '@/lib/apiClient';
 
 interface AuditLogTableProps {
-    logs: AuditLog[];
+    logs: any[]; // Using any[] to match the mapped shape in dashboard
     pageSize?: number;
 }
 
@@ -117,7 +108,8 @@ export default function AuditLogTable({ logs, pageSize = 5 }: AuditLogTableProps
                                 </td>
                             </tr>
                         ) : paginated.map((log, i) => {
-                            const { color, Icon } = sevConfig[log.severity];
+                            const severity = log.severity as 'info' | 'warning' | 'critical';
+                            const { color, Icon } = sevConfig[severity];
                             return (
                                 <tr key={log.id}
                                     style={{ background: i % 2 === 0 ? 'rgba(6,13,31,0.6)' : 'rgba(13,27,53,0.4)', borderTop: '1px solid rgba(0,200,255,0.06)' }}

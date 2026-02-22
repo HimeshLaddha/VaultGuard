@@ -1,6 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { Response } from 'express';
-import { Role } from '../store/index';
+import { Role, UserStatus } from '../store/index';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'CHANGE_ME';
 const JWT_PRE_AUTH_SECRET = process.env.JWT_PRE_AUTH_SECRET || 'CHANGE_ME_PRE';
@@ -17,6 +17,7 @@ export interface AccessPayload {
     email: string;
     name: string;
     role: Role;
+    status: UserStatus;
     type: 'access';
 }
 
